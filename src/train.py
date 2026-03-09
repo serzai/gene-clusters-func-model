@@ -30,9 +30,7 @@ def create_pipeline() -> Pipeline:
             ("num", StandardScaler(), numeric_features),
             (
                 "cat",
-                TargetEncoder(
-                    target_type="binary", min_samples_leaf=20, smoothing=10.0
-                ),
+                TargetEncoder(target_type="binary", smooth="auto"),
                 categorical_features,
             ),
         ]
