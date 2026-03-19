@@ -22,7 +22,7 @@ def clean_system(x: Any) -> str:
 
 
 def create_pairs(
-    df_partition: pd.DataFrame, num_neg_per_pos: int = 1
+    df_partition: pd.DataFrame, partition_id: str, num_neg_per_pos: int = 1
 ) -> List[Dict[str, Union[str, int, float]]]:
     """
     Generates positive and negative gene pairs within a single partition_id.
@@ -88,6 +88,7 @@ def create_pairs(
                 "is_neighbor": int(distance < 100),
                 "phylum": str(phyla[i]),
                 "class": str(classes[i]),
+                "partition_id": str(partition_id),
                 "target": label,
             }
         )
@@ -104,9 +105,9 @@ def generate_pairwise_dataset(
     print("---Loading raw data")
     df: pd.DataFrame = pd.read_csv(data_path)
 
-    df["cog_id"].fillna("Unknown", inplace=True)
-    df["phylum"].fillna("Unknown", inplace=True)
-    df["class"].fillna("Unknown", inplace=True)
+    df["cog_id"] = df["cog_id"].fillna("Unknown")
+    df["phylum"] = df["phylum"].fillna("Unknown")
+    df["class"] = df["class"].fillna("Unknown")
 
     if sample_frac < 1.0:
         unique_partitions: np.ndarray = df["partition_id"].unique()
@@ -119,7 +120,7 @@ def generate_pairwise_dataset(
     df["system"] = df["system"].apply(clean_system)
     df.dropna(subset=["system"], inplace=True)
 
-    print("---Generating pairs per partition and writing to disk...")
+    print("---Generating pairs per partition and writing to disk")
     grouped = df.groupby("partition_id")
     count: int = 0
     total: int = len(grouped)
@@ -130,12 +131,13 @@ def generate_pairwise_dataset(
     header_written = False
 
     for name, group in grouped:
-        group_pairs = create_pairs(group, 1)
+        group_pairs = create_pairs(group, str(name), 1)
         buffer.extend(group_pairs)
         count += 1
 
         if len(buffer) >= chunk_size:
             chunk_df = pd.DataFrame(buffer)
+            chunk_df.drop_duplicates(inplace=True)
             chunk_df.to_csv(
                 output_path, mode="a", header=not header_written, index=False
             )
@@ -147,9 +149,13 @@ def generate_pairwise_dataset(
 
     if len(buffer) > 0:
         chunk_df = pd.DataFrame(buffer)
+        chunk_df.drop_duplicates(inplace=True)
         chunk_df.to_csv(output_path, mode="a", header=not header_written, index=False)
         buffer.clear()
 
+    final_df = pd.read_csv(output_path)
+    final_df.drop_duplicates(inplace=True)
+    final_df.to_csv(output_path, index=False)
     print(f"---Dataset successfully generated and saved to {output_path}")
 
 
