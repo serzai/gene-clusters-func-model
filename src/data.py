@@ -79,9 +79,13 @@ def create_pairs(
             {
                 "cog_1": str(cogs[i]),
                 "cog_2": str(cogs[j]),
+                "is_same_cog": int(cogs[i] == cogs[j]),
                 "distance": distance,
                 "genes_between": genes_between,
                 "length_diff": lengs_diff,
+                "len_1": int(len_i),
+                "len_2": int(len_j),
+                "is_neighbor": int(distance < 100),
                 "phylum": str(phyla[i]),
                 "class": str(classes[i]),
                 "target": label,
@@ -149,7 +153,6 @@ def generate_pairwise_dataset(
     print(f"---Dataset successfully generated and saved to {output_path}")
 
 
-# Test
 if __name__ == "__main__":
     out_file = "data/processed/pairwise_cogs.csv"
     os.makedirs(os.path.dirname(out_file), exist_ok=True)
