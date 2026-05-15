@@ -1,20 +1,25 @@
-import ast
-import numpy as np
-import os
-import pandas as pd
-import random
-
 from typing import List, Dict, Any, Union
+import random
+import pandas as pd
+import os
+import numpy as np
+import ast
+import argparse
+import warnings
+warnings.filterwarnings("ignore")
 
 
 def clean_system(x: Any) -> str:
     """
-    Modifies list in *.csv file to string
+    Modifies list in *.csv file to string. Returns None if empty or invalid.
     """
     try:
         parsed_list = ast.literal_eval(x)
-        if isinstance(parsed_list, list) and len(parsed_list) > 0:
-            return str(parsed_list[0])
+        if isinstance(parsed_list, list):
+            if len(parsed_list) > 0:
+                return str(parsed_list[0])
+            else:
+                return None
     except (ValueError, SyntaxError):
         pass
 
@@ -26,13 +31,6 @@ def create_pairs(
 ) -> List[Dict[str, Union[str, int, float]]]:
     """
     Generates positive and negative gene pairs within a single partition_id.
-
-    Args:
-        df_partition: DataFrame containing genes for one partition_id.
-        num_neg_per_pos: Ratio of negative to positive pairs.
-
-    Returns:
-        A list of dictionaries containing pairwise features and targets.
     """
     df_partition = df_partition.sort_values("start").reset_index(drop=True)
     n_genes: int = len(df_partition)
@@ -49,22 +47,46 @@ def create_pairs(
     classes: np.ndarray = df_partition["class"].values
 
     positives: List[tuple[int, int]] = []
-    negatives: List[tuple[int, int]] = []
 
-    # Searching pos and neg pairs
+    from collections import defaultdict
+    system_to_indices = defaultdict(list)
     for i in range(n_genes):
-        for j in range(i + 1, n_genes):
-            if systems[i] == systems[j]:
-                positives.append((i, j))
-            else:
-                negatives.append((i, j))
+        system_to_indices[systems[i]].append(i)
 
-    # Balancing
+    for sys_name, indices in system_to_indices.items():
+        m = len(indices)
+        for i in range(m):
+            for j in range(i + 1, m):
+                idx1, idx2 = indices[i], indices[j]
+                if idx1 > idx2:
+                    idx1, idx2 = idx2, idx1
+                positives.append((idx1, idx2))
+
     num_neg_needed: int = len(positives) * num_neg_per_pos
-    if len(negatives) > num_neg_needed and num_neg_needed > 0:
-        negatives = random.sample(negatives, num_neg_needed)
+    negatives: set = set()
 
-    selected_pairs = [(pos, 1) for pos in positives] + [(neg, 0) for neg in negatives]
+    max_attempts = num_neg_needed * 50
+    attempts = 0
+
+    # Fast random sampling
+    while len(negatives) < num_neg_needed and attempts < max_attempts:
+        i = random.randint(0, n_genes - 2)
+        max_j = min(i + 20, n_genes - 1)
+        if max_j > i:
+            j = random.randint(i + 1, max_j)
+            if systems[i] != systems[j]:
+                negatives.add((i, j))
+        attempts += 1
+
+    # If we couldn't find enough hard negatives, fall back to any distance
+    while len(negatives) < num_neg_needed and attempts < max_attempts * 2:
+        i = random.randint(0, n_genes - 2)
+        j = random.randint(i + 1, n_genes - 1)
+        if systems[i] != systems[j]:
+            negatives.add((i, j))
+        attempts += 1
+    selected_pairs = [(pos, 1) for pos in positives] + \
+        [(neg, 0) for neg in negatives]
 
     # Features
     for (i, j), label in selected_pairs:
@@ -89,6 +111,7 @@ def create_pairs(
                 "phylum": str(phyla[i]),
                 "class": str(classes[i]),
                 "partition_id": str(partition_id),
+                "assembly_id": str(df_partition["assembly_id"].iloc[0]),
                 "target": label,
             }
         )
@@ -147,10 +170,13 @@ def generate_pairwise_dataset(
         if count % 1000 == 0:
             print(f"-----Processed {count}/{total} partitions")
 
+    print(f"-----Processed {total} partitions")
+
     if len(buffer) > 0:
         chunk_df = pd.DataFrame(buffer)
         chunk_df.drop_duplicates(inplace=True)
-        chunk_df.to_csv(output_path, mode="a", header=not header_written, index=False)
+        chunk_df.to_csv(output_path, mode="a",
+                        header=not header_written, index=False)
         buffer.clear()
 
     final_df = pd.read_csv(output_path)
@@ -160,17 +186,41 @@ def generate_pairwise_dataset(
 
 
 if __name__ == "__main__":
-    out_file = "data/processed/pairwise_cogs.csv"
-    os.makedirs(os.path.dirname(out_file), exist_ok=True)
+    parser = argparse.ArgumentParser(
+        description="Generate pairwise dataset for gene cluster functional modeling."
+    )
+    parser.add_argument(
+        "--input",
+        type=str,
+        default="data/raw/cogs.csv",
+        help="Path to the raw input *.csv file.",
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default="data/processed/pairwise_cogs.csv",
+        help="Output path for *.csv file.",
+    )
+    parser.add_argument(
+        "--sample_frac",
+        type=float,
+        default=1.0,
+        help="Fraction of unique partitions to sample (default 1.0).",
+    )
 
-    if os.path.exists(out_file):
-        os.remove(out_file)
+    args = parser.parse_args()
 
-    generate_pairwise_dataset("data/raw/cogs.csv", out_file, sample_frac=1.0)
+    os.makedirs(os.path.dirname(args.output), exist_ok=True)
 
-    df_result = pd.read_csv(out_file)
+    if os.path.exists(args.output):
+        os.remove(args.output)
+
+    generate_pairwise_dataset(args.input, args.output,
+                              sample_frac=args.sample_frac)
+
+    df_result = pd.read_csv(args.output)
     print(f"Total dataset shape: {df_result.shape}")
 
     if not df_result.empty:
         print("---10 samples:")
-        print(df_result.sample(10).reset_index(drop=True))
+        print(df_result.sample(min(10, len(df_result))).reset_index(drop=True))
